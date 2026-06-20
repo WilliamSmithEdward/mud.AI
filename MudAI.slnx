@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="MudAI.App/MudAI.App.csproj" />
+  <Project Path="MudAI.Tests/MudAI.Tests.csproj" />
+</Solution>
