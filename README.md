@@ -73,7 +73,7 @@ Edit MudAI.App/appsettings.json (copied next to the exe on build):
 | LlmModel | local-model | Model name (LM Studio uses it as a label) |
 | StreamResponses | true | Stream the model output token by token (and early-stop once the JSON decision is complete) |
 | StreamIdleTimeoutMs | 30000 | End a stalled stream if no token arrives in this window |
-| UseJsonResponseFormat | true | Ask the server for guaranteed JSON (response_format); prevents empty/garbled decisions |
+| UseJsonResponseFormat | true | Constrain the reply to the decision schema (response_format=json_schema); prevents empty/garbled decisions |
 | ContextWindowTokens | 98304 | Model context window for budgeting |
 | MaxResponseTokens | 512 | Max tokens per decision (tight = faster decode) |
 | MaxRecentLines | 80 | Screen lines fed to the model each turn (the real prompt-size lever) |

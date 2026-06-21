@@ -407,11 +407,14 @@ public sealed class AgentOrchestrator : IAsyncDisposable
 
                     await Task.Delay(_options.MinTurnDelayMs, ct);
                 }
-                catch (OperationCanceledException) { break; }
+                // Only a real stop request ends the loop. A TaskCanceledException from an
+                // HttpClient timeout (our ct is NOT cancelled) is a recoverable error, so let it
+                // fall through to the handler below rather than silently killing the agent.
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Agent loop iteration failed");
-                    Status?.Invoke(this, $"Loop error: {ex.Message}");
+                    Status?.Invoke(this, $"Loop error: {Describe(ex)}");
                     try { await Task.Delay(1500, ct); }
                     catch (OperationCanceledException) { break; }
                 }
@@ -425,6 +428,21 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         {
             Status?.Invoke(this, "Agent loop stopped.");
         }
+    }
+
+    /// <summary>Human-readable one-liner for an exception. Some framework exceptions (and the
+    /// occasional cancellation) carry an empty Message, which would render as a useless bare
+    /// "Loop error:"; fall back to the type name and walk the inner-exception chain so the cause
+    /// is always visible without a debugger attached.</summary>
+    private static string Describe(Exception ex)
+    {
+        var parts = new List<string>();
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            string msg = e.Message?.Trim() ?? "";
+            parts.Add(msg.Length > 0 ? $"{e.GetType().Name}: {msg}" : e.GetType().Name);
+        }
+        return string.Join(" -> ", parts);
     }
 
     /// <summary>Runs the completion, retrying once if the model returns nothing (a wasted turn).</summary>

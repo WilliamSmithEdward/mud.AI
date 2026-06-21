@@ -145,8 +145,12 @@ public sealed class LmStudioClient : ILlmClient
         Temperature = _options.Temperature,
         MaxTokens = _options.MaxResponseTokens,
         Stream = stream,
-        // Force a guaranteed-JSON response so the model can't return rambling prose or nothing.
-        ResponseFormat = _options.UseJsonResponseFormat ? new ResponseFormat() : null,
+        // Constrain the reply to the decision schema so the model can't return prose or nothing.
+        // LM Studio (current builds) only accepts response_format.type "json_schema" or "text" -
+        // the older OpenAI "json_object" mode is rejected with a 400 - so we send a real schema.
+        ResponseFormat = _options.UseJsonResponseFormat
+            ? new ResponseFormat { JsonSchema = new JsonSchemaSpec { Schema = DecisionSchema } }
+            : null,
         Messages = [.. messages.Select(m => new WireMessage { Role = m.Role, Content = m.Content })]
     };
 
@@ -193,8 +197,47 @@ public sealed class LmStudioClient : ILlmClient
 
     private sealed class ResponseFormat
     {
-        [JsonPropertyName("type")] public string Type { get; set; } = "json_object";
+        [JsonPropertyName("type")] public string Type { get; set; } = "json_schema";
+        [JsonPropertyName("json_schema")] public JsonSchemaSpec? JsonSchema { get; set; }
     }
+
+    private sealed class JsonSchemaSpec
+    {
+        [JsonPropertyName("name")] public string Name { get; set; } = "mud_agent_decision";
+        [JsonPropertyName("strict")] public bool Strict { get; set; } = true;
+        [JsonPropertyName("schema")] public JsonElement Schema { get; set; }
+    }
+
+    // Mirrors the decision object the system prompt asks for (see ContextBuilder). Optional fields
+    // (goal/lesson/awareness) are nullable unions so the model can null them out while still
+    // satisfying strict mode, which requires every property to be listed in "required".
+    // Parsed once and kept for the app lifetime so the JsonElement stays valid.
+    private static readonly JsonElement DecisionSchema = JsonDocument.Parse("""
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reasoning":  { "type": "string" },
+            "command":    { "type": "string" },
+            "goal":       { "type": ["string", "null"] },
+            "risk":       { "type": "string", "enum": ["low", "medium", "high"] },
+            "confidence": { "type": "number" },
+            "wait":       { "type": "boolean" },
+            "lesson":     { "type": ["string", "null"] },
+            "awareness": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "properties": {
+                "category": { "type": "string" },
+                "subject":  { "type": "string" },
+                "fact":     { "type": "string" }
+              },
+              "required": ["category", "subject", "fact"]
+            }
+          },
+          "required": ["reasoning", "command", "goal", "risk", "confidence", "wait", "lesson", "awareness"]
+        }
+        """).RootElement;
 
     private sealed class WireMessage
     {

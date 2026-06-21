@@ -23,9 +23,9 @@ public sealed class MudAiOptions
     /// keeps decode (the dominant latency) short. Raise it if a "thinking" model needs headroom.</summary>
     public int MaxResponseTokens { get; set; } = 512;
 
-    /// <summary>Ask the server for a guaranteed-JSON response (OpenAI response_format=json_object).
-    /// Suppresses rambling/thinking preamble and prevents empty/garbled decisions. Disable if your
-    /// model or server rejects the parameter.</summary>
+    /// <summary>Ask the server to constrain the reply to the decision schema
+    /// (response_format=json_schema). Suppresses rambling/thinking preamble and prevents
+    /// empty/garbled decisions. Disable if your model or server rejects the parameter.</summary>
     public bool UseJsonResponseFormat { get; set; } = true;
 
     /// <summary>Stream the model's output token-by-token (shown live in the UI).</summary>
