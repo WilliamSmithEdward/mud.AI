@@ -1,4 +1,4 @@
-# MudAI
+# mud.AI
 
 A Windows desktop app (WPF, .NET 10) that connects to any telnet MUD and plays it with a
 local LLM served by LM Studio at http://127.0.0.1:1234. It is a hand-drivable MUD client
