@@ -1,13 +1,19 @@
 using System.Net.Sockets;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using MudAI.Core.Configuration;
 
 namespace MudAI.Core.Telnet;
 
 /// <summary>
-/// TCP telnet client with a small IAC state machine. We answer negotiations
-/// conservatively (refuse almost everything, accept Suppress-Go-Ahead) so the
-/// server sends a clean character stream, and we strip all IAC sequences before
-/// raising <see cref="TextReceived"/>.
+/// TCP telnet client with a small IAC state machine. We answer negotiations conservatively
+/// (refuse almost everything, accept Suppress-Go-Ahead and GMCP/MSDP) so the server sends a
+/// clean character stream, and we strip all IAC sequences before raising <see cref="TextReceived"/>.
+///
+/// Thread-safe: public members may be called from any thread. Sends are serialized by a send
+/// lock and connection state is guarded by a state lock. Events are raised on the reader thread,
+/// so subscribers must marshal to their own thread as needed.
 /// </summary>
 public sealed class TelnetClient : ITelnetClient
 {
@@ -17,6 +23,8 @@ public sealed class TelnetClient : ITelnetClient
 
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly object _stateLock = new();
+    private readonly int _connectTimeoutMs;
+    private readonly ILogger<TelnetClient> _logger;
 
     // Last negotiation response we sent per (verb<<8|option). Touched only on the reader thread.
     private readonly Dictionary<int, byte> _negotiationState = new();
@@ -26,6 +34,12 @@ public sealed class TelnetClient : ITelnetClient
     private NetworkStream? _stream;
     private CancellationTokenSource? _readCts;
     private Task? _readLoop;
+
+    public TelnetClient(IOptions<MudAiOptions> options, ILogger<TelnetClient> logger)
+    {
+        _connectTimeoutMs = options.Value.ConnectTimeoutMs;
+        _logger = logger;
+    }
 
     public bool IsConnected => _tcp?.Connected == true;
 
@@ -41,7 +55,25 @@ public sealed class TelnetClient : ITelnetClient
         _gmcpHandshakeSent = false;
 
         var tcp = new TcpClient { NoDelay = true };
-        await tcp.ConnectAsync(host, port, ct);
+        try
+        {
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (_connectTimeoutMs > 0) connectCts.CancelAfter(_connectTimeoutMs);
+            await tcp.ConnectAsync(host, port, connectCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            tcp.Dispose();
+            _logger.LogWarning("Telnet connect to {Host}:{Port} timed out after {TimeoutMs}ms", host, port, _connectTimeoutMs);
+            throw new TimeoutException($"Connection to {host}:{port} timed out after {_connectTimeoutMs}ms.");
+        }
+        catch
+        {
+            tcp.Dispose();
+            throw;
+        }
+
+        TryEnableKeepAlive(tcp);
 
         lock (_stateLock)
         {
@@ -51,7 +83,15 @@ public sealed class TelnetClient : ITelnetClient
             _readLoop = Task.Run(() => ReadLoopAsync(_readCts.Token));
         }
 
+        _logger.LogInformation("Telnet connected to {Host}:{Port}", host, port);
         ConnectionStateChanged?.Invoke(this, true);
+    }
+
+    private static void TryEnableKeepAlive(TcpClient tcp)
+    {
+        // Best-effort: lets a silently dropped connection surface instead of hanging the reader.
+        try { tcp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true); }
+        catch { /* not fatal if the platform refuses it */ }
     }
 
     private enum State { Data, Iac, Negotiate, SubnegOption, Subneg, SubnegIac }
@@ -136,7 +176,10 @@ public sealed class TelnetClient : ITelnetClient
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
         {
             if (!ct.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex, "Telnet read loop ended on error");
                 Error?.Invoke(this, ex.Message);
+            }
         }
         finally
         {
@@ -188,7 +231,7 @@ public sealed class TelnetClient : ITelnetClient
 
         // Once we've agreed to GMCP, advertise the packages we care about so the server starts
         // sending structured data (Char.Vitals, Room.Info, ...). Send the handshake at most once
-        // per connection — servers often negotiate GMCP in both directions (WILL + DO).
+        // per connection, since servers often negotiate GMCP in both directions (WILL + DO).
         if (option == TelnetBytes.OptGmcp && response is TelnetBytes.DO or TelnetBytes.WILL && !_gmcpHandshakeSent)
         {
             _gmcpHandshakeSent = true;

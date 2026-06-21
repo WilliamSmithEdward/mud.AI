@@ -24,8 +24,8 @@ If a conflict is material and you cannot resolve it from these, stop and ask.
 ## Project specifics
 
 MudAI is a Windows desktop app: a telnet MUD client that also plays the game with a local LLM.
-It connects to Arctic MUD (mud.arctic.org:2700) and talks to an LM Studio server at
-http://127.0.0.1:1234.
+It works with any telnet MUD (the default and test target is mud.arctic.org:2700) and talks to an
+LM Studio server at http://127.0.0.1:1234.
 
 - Toolchain: C# 14 on .NET 10 SDK. `MudAI.Core` targets `net10.0`; `MudAI.App` targets
   `net10.0-windows` (WPF). NuGet for packages. Windows-only (WPF / WindowsDesktop runtime).

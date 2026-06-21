@@ -15,6 +15,12 @@ public sealed class AgentContextInput
     /// <summary>Compact live state from GMCP/MSDP (HP/MP/room/exits), empty if unavailable.</summary>
     public string GameStateSummary { get; init; } = "";
 
+    /// <summary>Compact persistent-map recall: current room's known exits and total rooms mapped.</summary>
+    public string MapRecall { get; init; } = "";
+
+    /// <summary>True when no new MUD line has arrived since the last turn (the MUD is idle).</summary>
+    public bool NoNewOutput { get; init; }
+
     /// <summary>Summary of commands that have been failing (from the anti-loop tracker).</summary>
     public string FailureContext { get; init; } = "";
 
@@ -23,6 +29,9 @@ public sealed class AgentContextInput
 
     public IReadOnlyList<Lesson> Lessons { get; init; } = [];
     public IReadOnlyList<CommandKnowledge> Commands { get; init; } = [];
+
+    /// <summary>Balanced, ranked awareness entries grouped by category (the "WHAT YOU KNOW" block).</summary>
+    public IReadOnlyList<AwarenessEntry> Awareness { get; init; } = [];
 
     public AutonomyMode Mode { get; init; }
 }

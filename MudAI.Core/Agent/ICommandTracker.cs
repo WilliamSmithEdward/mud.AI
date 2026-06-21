@@ -3,7 +3,7 @@ using MudAI.Core.Models;
 namespace MudAI.Core.Agent;
 
 /// <summary>
-/// Tracks command→outcome history to stop the agent from looping commands that don't work.
+/// Tracks command-and-outcome history to stop the agent from looping commands that don't work.
 /// </summary>
 public interface ICommandTracker
 {

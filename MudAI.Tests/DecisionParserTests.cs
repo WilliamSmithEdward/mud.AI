@@ -68,4 +68,47 @@ public class DecisionParserTests
         var d = DecisionParser.Parse("");
         Assert.True(d.Wait);
     }
+
+    [Fact]
+    public void ParsesAwarenessObject()
+    {
+        var d = DecisionParser.Parse("""{"command":"look","awareness":{"category":"combat","subject":"rat","fact":"easy"}}""");
+        Assert.NotNull(d.Awareness);
+        Assert.Equal("combat", d.Awareness!.Category);
+        Assert.Equal("rat", d.Awareness.Subject);
+        Assert.Equal("easy", d.Awareness.Fact);
+    }
+
+    [Fact]
+    public void ParsesAwarenessBareString_AsMisc()
+    {
+        var d = DecisionParser.Parse("""{"command":"look","awareness":"rats are easy to kill"}""");
+        Assert.NotNull(d.Awareness);
+        Assert.Equal("misc", d.Awareness!.Category);
+        Assert.Contains("rats", d.Awareness.Fact);
+    }
+
+    [Fact]
+    public void AwarenessOnly_IsMeaningful()
+    {
+        var d = DecisionParser.Parse("""{"awareness":{"category":"geography","subject":"midgaard","fact":"central hub"}}""");
+        Assert.NotNull(d.Awareness);
+        Assert.Equal("midgaard", d.Awareness!.Subject);
+    }
+
+    [Fact]
+    public void MissingAwareness_IsNull()
+    {
+        var d = DecisionParser.Parse("""{"command":"north"}""");
+        Assert.Null(d.Awareness);
+    }
+
+    [Fact]
+    public void ContainsBalancedObject_DetectsCompletionForEarlyStop()
+    {
+        Assert.True(DecisionParser.ContainsBalancedObject("""{"command":"north"}"""));
+        Assert.False(DecisionParser.ContainsBalancedObject("""{"command":"nor"""));   // still streaming
+        Assert.True(DecisionParser.ContainsBalancedObject("""before {"a":"}{"} after""")); // braces in string ignored
+        Assert.False(DecisionParser.ContainsBalancedObject("no json yet"));
+    }
 }

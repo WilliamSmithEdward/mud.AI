@@ -8,7 +8,7 @@ using MudAI.Core.Models;
 namespace MudAI.App;
 
 /// <summary>
-/// Code-behind handles only terminal rendering — turning each <see cref="MudMessage"/> into
+/// Code-behind handles only terminal rendering: turning each <see cref="MudMessage"/> into
 /// coloured WPF <see cref="Run"/>s in the RichTextBox. All state/logic lives in the view-model.
 /// </summary>
 public partial class MainWindow : Window
@@ -17,11 +17,13 @@ public partial class MainWindow : Window
     private const int TrimBatch = 2000;
 
     private readonly Paragraph _paragraph;
+    private readonly MainViewModel _viewModel;
 
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
         DataContext = viewModel;
+        _viewModel = viewModel;
 
         _paragraph = new Paragraph { Margin = new Thickness(2) };
         TerminalBox.Document = new FlowDocument(_paragraph)
@@ -33,15 +35,31 @@ public partial class MainWindow : Window
 
         viewModel.MessageReceived += AppendMessage;
         viewModel.TranscriptCleared += ClearTerminal;
+        viewModel.PromptChanged += RenderPrompt;
+    }
 
-        // PasswordBox can't be data-bound (by design); sync it manually.
-        LoginPasswordBox.Password = viewModel.InitialLoginPassword;
-        LoginPasswordBox.PasswordChanged += (_, _) => viewModel.SetLoginPassword(LoginPasswordBox.Password);
+    private void OpenSettings_Click(object sender, RoutedEventArgs e)
+    {
+        new SettingsWindow(_viewModel) { Owner = this }.ShowDialog();
     }
 
     private void ClearTerminal()
     {
         _paragraph.Inlines.Clear();
+    }
+
+    private void RenderPrompt(MudMessage message)
+    {
+        PromptBox.Inlines.Clear();
+        if (message.Segments.Count > 0)
+        {
+            foreach (var segment in message.Segments)
+                PromptBox.Inlines.Add(BuildRun(segment));
+        }
+        else if (!string.IsNullOrEmpty(message.PlainText))
+        {
+            PromptBox.Inlines.Add(new Run(message.PlainText) { Foreground = DefaultFg });
+        }
     }
 
     private void AppendMessage(MudMessage message)
@@ -75,6 +93,7 @@ public partial class MainWindow : Window
 
         TrimIfNeeded();
         TerminalBox.ScrollToEnd();
+        _viewModel.HasTerminalContent = true; // hide the empty-state placeholder
     }
 
     private static Run BuildRun(AnsiSegment seg)
@@ -115,21 +134,23 @@ public partial class MainWindow : Window
 
     private static Brush NormalBrush(AnsiColor color) => NormalBrushes[(int)color];
 
-    private static readonly SolidColorBrush DefaultFg = Frozen(0xD0, 0xD0, 0xD0);
-    private static readonly SolidColorBrush TerminalBg = Frozen(0x0B, 0x0B, 0x0B);
-    private static readonly SolidColorBrush OutgoingBrush = Frozen(0x6E, 0xC6, 0xFF);
-    private static readonly SolidColorBrush SystemBrush = Frozen(0x9A, 0x9A, 0x9A);
+    private static readonly SolidColorBrush DefaultFg = Frozen(0xD7, 0xDA, 0xE0);
+    private static readonly SolidColorBrush TerminalBg = Frozen(0x0C, 0x0E, 0x13);
+    private static readonly SolidColorBrush OutgoingBrush = Frozen(0x9D, 0xB0, 0xC8);
+    private static readonly SolidColorBrush SystemBrush = Frozen(0xA0, 0xA6, 0xB0);
 
+    // Normal palette floored to >= 4.5:1 against the near-black terminal background so no entry
+    // (notably ANSI "black" and red) renders invisibly. Bright entries are already high-contrast.
     private static readonly SolidColorBrush[] NormalBrushes =
     [
-        Frozen(0x00, 0x00, 0x00), // black
-        Frozen(0xCD, 0x3A, 0x3A), // red
-        Frozen(0x33, 0xB0, 0x33), // green
-        Frozen(0xCD, 0xCD, 0x00), // yellow
-        Frozen(0x4A, 0x7B, 0xEE), // blue
-        Frozen(0xCD, 0x00, 0xCD), // magenta
-        Frozen(0x00, 0xCD, 0xCD), // cyan
-        Frozen(0xE5, 0xE5, 0xE5)  // white
+        Frozen(0x8A, 0x8F, 0x99), // black -> readable grey
+        Frozen(0xE0, 0x6C, 0x5E), // red
+        Frozen(0x5F, 0xBF, 0x73), // green
+        Frozen(0xCE, 0xBE, 0x5A), // yellow
+        Frozen(0x6E, 0x97, 0xF2), // blue
+        Frozen(0xD1, 0x73, 0xCC), // magenta
+        Frozen(0x46, 0xC2, 0xC2), // cyan
+        Frozen(0xD7, 0xDA, 0xE0)  // white
     ];
 
     private static readonly SolidColorBrush[] BrightBrushes =

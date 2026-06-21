@@ -20,6 +20,9 @@ public sealed class AgentDecision
     /// <summary>A durable lesson worth persisting to memory, if any.</summary>
     public string? Lesson { get; init; }
 
+    /// <summary>An optional categorized awareness note to file into the persistent knowledge base.</summary>
+    public AwarenessNote? Awareness { get; init; }
+
     /// <summary>True when the agent deliberately wants to wait rather than send a command.</summary>
     public bool Wait { get; init; }
 

@@ -17,20 +17,28 @@ public sealed class ContextBuilder(IOptions<MudAiOptions> options) : IContextBui
 
     private const string SystemPrompt = """
         You are an autonomous agent learning to play a text-based MUD (Multi-User Dungeon)
-        called Arctic, a DikuMUD-style game, through a telnet client. You read the recent
-        game screen and decide the single best next command to type.
+        through a telnet client. You read the recent game screen and decide the single best
+        next command to type.
 
         How to play well:
-        - Issue exactly ONE concrete MUD command per turn (e.g. "look", "north", "score",
-          "kill rat", "get sword", "wear armor"). Use real MUD verbs.
+        - Issue a concrete MUD command (e.g. "look", "north", "score", "kill rat", "get sword").
+          Use real MUD verbs. You may chain a short, safe sequence in one turn by separating
+          commands with semicolons, e.g. "open door;north;look". Prefer a single command when you
+          need to see the result before deciding the next step.
+        - To travel quickly, chain movement directions with semicolons, e.g. "w;w;n;w;s" walks
+          west, west, north, west, south in one turn. Chain moves only along a path you are
+          confident about; send a single move when exploring an unknown exit.
         - When you first connect you may be at a login/menu/character screen. Read it
           carefully and respond appropriately (enter a name, choose menu options, press
           enter, etc.). Lines you type are sent verbatim.
         - Prefer observing ("look", reading prompts) when unsure rather than guessing wildly.
         - NEVER repeat a command that has been failing. If something didn't work, try a
           genuinely different approach. The "commands that are failing" list is authoritative.
-        - Build a mental map: note exits, rooms, and dangers. Record durable insights as a
-          "lesson" so you remember them next session.
+        - Build a mental map: note exits, rooms, and dangers. Record a one-off tactical insight as a
+          "lesson". For durable, organized knowledge, file an "awareness" note: pick a category from
+          [geography, navigation, combat, skills, progression, economy, npcs, misc], a short subject
+          (a name/place/topic), and a concise fact. Re-file the same subject to refine what you know.
+          File at most one awareness note per turn, and only when you genuinely learned something durable.
         - Stay alive: flee or heal when in danger; don't attack things far above your level.
 
         Respond with ONLY a single JSON object, no prose, no markdown fences:
@@ -41,10 +49,13 @@ public sealed class ContextBuilder(IOptions<MudAiOptions> options) : IContextBui
           "risk": "low|medium|high",
           "confidence": 0.0-1.0,
           "wait": false,
-          "lesson": "<optional durable insight worth remembering, else empty>"
+          "lesson": "<optional durable insight worth remembering, else empty>",
+          "awareness": { "category": "<one from the list, or omit>", "subject": "<short key>", "fact": "<concise fact>" }
         }
-        Set "wait": true (and command "") only if the right move is to observe and let more
-        output arrive. Keep "reasoning" short. Output the JSON object and nothing else.
+        Use "wait": true (with command "") sparingly, only while output is actively scrolling and
+        you must let it finish. If the screen is static and nothing new is happening, do NOT wait:
+        take a proactive action toward your goal (move to an exit, look, check inventory or score).
+        Keep "reasoning" short. Output the JSON object and nothing else.
         """;
 
     public IReadOnlyList<ChatMessage> Build(AgentContextInput input)
@@ -54,19 +65,29 @@ public sealed class ContextBuilder(IOptions<MudAiOptions> options) : IContextBui
         // --- fixed (non-screen) user sections ---
         var header = new StringBuilder();
 
+        // Sections are ordered stable-first so the model server's KV cache can reuse the longest
+        // unchanged prefix between turns: slow-changing knowledge (goal, awareness, memory, map)
+        // comes first; the every-turn state (steering, idle note, live state) and the screen go
+        // last, where they change anyway.
         header.Append("CURRENT GOAL: ")
-              .AppendLine(string.IsNullOrWhiteSpace(input.Goal) ? "(none yet — decide one)" : input.Goal);
+              .AppendLine(string.IsNullOrWhiteSpace(input.Goal) ? "(none yet, decide one)" : input.Goal);
 
-        if (!string.IsNullOrWhiteSpace(input.Steering))
+        string awareness = BuildAwarenessSection(input.Awareness);
+        if (awareness.Length > 0)
         {
-            header.AppendLine().AppendLine("LIVE STEERING FROM THE HUMAN (follow this):")
-                  .AppendLine(input.Steering.Trim());
+            header.AppendLine().AppendLine("WHAT YOU KNOW (organized memory across sessions):").Append(awareness);
         }
 
-        if (!string.IsNullOrWhiteSpace(input.GameStateSummary))
+        var memory = BuildMemorySection(input.Lessons, input.Commands);
+        if (memory.Length > 0)
         {
-            header.AppendLine().Append("LIVE GAME STATE (authoritative, from the MUD): ")
-                  .AppendLine(input.GameStateSummary);
+            header.AppendLine().AppendLine("WHAT YOU'VE LEARNED SO FAR:").Append(memory);
+        }
+
+        if (!string.IsNullOrWhiteSpace(input.MapRecall))
+        {
+            header.AppendLine().Append("KNOWN MAP (from past exploration): ")
+                  .AppendLine(input.MapRecall);
         }
 
         if (!string.IsNullOrWhiteSpace(input.FailureContext))
@@ -81,10 +102,22 @@ public sealed class ContextBuilder(IOptions<MudAiOptions> options) : IContextBui
                   .AppendLine(string.Join(", ", input.Suppressed.Select(s => $"\"{s}\"")));
         }
 
-        var memory = BuildMemorySection(input.Lessons, input.Commands);
-        if (memory.Length > 0)
+        if (!string.IsNullOrWhiteSpace(input.Steering))
         {
-            header.AppendLine().AppendLine("WHAT YOU'VE LEARNED SO FAR:").Append(memory);
+            header.AppendLine().AppendLine("LIVE STEERING FROM THE HUMAN (follow this):")
+                  .AppendLine(input.Steering.Trim());
+        }
+
+        if (input.NoNewOutput)
+        {
+            header.AppendLine().AppendLine(
+                "NOTE: No new output from the MUD since your last action, it is idle. Do not wait; take a proactive step toward your goal now.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(input.GameStateSummary))
+        {
+            header.AppendLine().Append("LIVE GAME STATE (authoritative, from the MUD): ")
+                  .AppendLine(input.GameStateSummary);
         }
 
         header.AppendLine().AppendLine("RECENT GAME SCREEN (most recent at the bottom):");
@@ -102,6 +135,38 @@ public sealed class ContextBuilder(IOptions<MudAiOptions> options) : IContextBui
 
         var user = ChatMessage.User(header.Append(screen).ToString());
         return [system, user];
+    }
+
+    /// <summary>
+    /// Renders awareness entries grouped by category, one line per category (subjects joined with
+    /// " | "), trimmed to the configured token cap as a hard backstop against prompt bloat.
+    /// </summary>
+    private string BuildAwarenessSection(IReadOnlyList<AwarenessEntry> awareness)
+    {
+        if (awareness.Count == 0) return "";
+
+        // Order categories by their strongest entry so that when the token cap binds it drops the
+        // least-valuable categories, not whichever happen to sort last alphabetically.
+        var lines = awareness
+            .GroupBy(a => a.Category)
+            .Select(g => new
+            {
+                Rank = g.Max(a => a.Confidence),
+                Line = $"[{g.Key}] {string.Join(" | ", g.Select(a => $"{a.Subject}: {a.Fact}"))}"
+            })
+            .OrderByDescending(g => g.Rank)
+            .Select(g => g.Line);
+
+        var sb = new StringBuilder();
+        int used = 0;
+        foreach (var line in lines)
+        {
+            int cost = TokenEstimator.Estimate(line) + 1;
+            if (used + cost > _options.AwarenessRecallTokens) break; // hard backstop
+            sb.AppendLine(line);
+            used += cost;
+        }
+        return sb.ToString();
     }
 
     private static string BuildMemorySection(

@@ -5,98 +5,70 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:MudAI.App"
         mc:Ignorable="d"
-        Title="MudAI — Arctic MUD AI Client"
-        Height="780" Width="1200"
-        Background="#FF161616"
-        TextElement.Foreground="#FFE0E0E0"
-        FontFamily="Segoe UI" FontSize="13">
+        Title="MudAI - Telnet MUD AI Client"
+        Height="820" Width="1200" MinHeight="560" MinWidth="900"
+        Background="{StaticResource BgBrush}"
+        TextElement.Foreground="{StaticResource TextPrimaryBrush}"
+        FontFamily="Segoe UI" FontSize="14">
 
     <Window.Resources>
-        <BooleanToVisibilityConverter x:Key="BoolToVis" />
-
-        <SolidColorBrush x:Key="PanelBg" Color="#FF1E1E1E" />
-        <SolidColorBrush x:Key="PanelBorder" Color="#FF3A3A3A" />
-        <SolidColorBrush x:Key="Accent" Color="#FF4FC1FF" />
-        <SolidColorBrush x:Key="Muted" Color="#FF9A9A9A" />
-
-        <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#FFE0E0E0" />
-        </Style>
-        <Style TargetType="Label">
-            <Setter Property="Foreground" Value="#FFB8B8B8" />
-            <Setter Property="Padding" Value="0,2" />
-        </Style>
-        <Style TargetType="TextBox">
-            <Setter Property="Background" Value="#FF111111" />
-            <Setter Property="Foreground" Value="#FFEAEAEA" />
-            <Setter Property="BorderBrush" Value="{StaticResource PanelBorder}" />
-            <Setter Property="CaretBrush" Value="#FFEAEAEA" />
-            <Setter Property="Padding" Value="4,3" />
-        </Style>
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="#FF2D2D30" />
-            <Setter Property="Foreground" Value="#FFEAEAEA" />
-            <Setter Property="BorderBrush" Value="{StaticResource PanelBorder}" />
-            <Setter Property="Padding" Value="10,4" />
-            <Setter Property="Margin" Value="3,0" />
-        </Style>
-        <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="#FF2D2D30" />
-            <Setter Property="Foreground" Value="#FF111111" />
-        </Style>
-        <Style x:Key="SectionHeader" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource Accent}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Margin" Value="0,8,0,3" />
-        </Style>
+        <BooleanToVisibilityConverter x:Key="BoolVis" />
+        <local:InverseBooleanToVisibilityConverter x:Key="InvBoolVis" />
+        <FontFamily x:Key="Mono">Consolas, Cascadia Mono, Courier New</FontFamily>
     </Window.Resources>
 
-    <Grid Margin="8">
+    <Grid Margin="12">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- ===== Connection bar ===== -->
-        <Border Grid.Row="0" Background="{StaticResource PanelBg}" BorderBrush="{StaticResource PanelBorder}"
-                BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,8">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="Host" VerticalAlignment="Center" Margin="0,0,4,0" />
-                <TextBox Text="{Binding Host}" Width="150" VerticalAlignment="Center" />
-                <TextBlock Text="Port" VerticalAlignment="Center" Margin="10,0,4,0" />
-                <TextBox Text="{Binding Port}" Width="60" VerticalAlignment="Center" />
-                <Button Content="Connect" Command="{Binding ConnectCommand}" Margin="10,0,0,0" />
+                <Button Content="Connect" Style="{StaticResource PrimaryButton}"
+                        Command="{Binding ConnectCommand}" Margin="0,0,8,0" />
                 <Button Content="Disconnect" Command="{Binding DisconnectCommand}" />
-                <Ellipse Width="10" Height="10" Margin="14,0,5,0" VerticalAlignment="Center">
+
+                <Ellipse Width="10" Height="10" VerticalAlignment="Center" Margin="16,0,6,0">
                     <Ellipse.Style>
                         <Style TargetType="Ellipse">
-                            <Setter Property="Fill" Value="#FFB54A4A" />
+                            <Setter Property="Fill" Value="{StaticResource DangerBrush}" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsConnected}" Value="True">
-                                    <Setter Property="Fill" Value="#FF5BC46A" />
+                                    <Setter Property="Fill" Value="{StaticResource SuccessBrush}" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </Ellipse.Style>
                 </Ellipse>
                 <TextBlock Text="{Binding ConnectionStatus}" VerticalAlignment="Center" />
-                <Button Content="Test LM Studio" Command="{Binding PingLlmCommand}" Margin="20,0,4,0" />
-                <TextBlock Text="{Binding LlmStatus}" VerticalAlignment="Center" Foreground="{StaticResource Muted}" />
+                <TextBlock Style="{StaticResource CaptionText}" VerticalAlignment="Center" Margin="12,0,0,0"><Run Text="Server: " /><Run Text="{Binding Host}" /><Run Text=":" /><Run Text="{Binding Port}" /></TextBlock>
+
+                <Button Content="Test LM Studio" Command="{Binding PingLlmCommand}" Margin="24,0,8,0" />
+                <TextBlock Text="{Binding LlmStatus}" Style="{StaticResource CaptionText}" VerticalAlignment="Center" />
+
+                <Button Content="Settings" Click="OpenSettings_Click" Margin="24,0,0,0" />
             </StackPanel>
         </Border>
 
+        <!-- ===== Busy indicator (1s-10s indeterminate feedback) ===== -->
+        <ProgressBar Grid.Row="1" Style="{StaticResource BusyBar}" Margin="0,0,0,6"
+                     Visibility="{Binding IsBusy, Converter={StaticResource BoolVis}}"
+                     AutomationProperties.Name="Working" />
+
         <!-- ===== Main split: terminal | AI panel ===== -->
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MinWidth="420" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="400" MinWidth="340" />
+                <ColumnDefinition Width="420" MinWidth="360" />
             </Grid.ColumnDefinitions>
 
             <!-- Terminal column -->
-            <Border Grid.Column="0" Background="{StaticResource PanelBg}" BorderBrush="{StaticResource PanelBorder}"
-                    BorderThickness="1" CornerRadius="4" Padding="2">
+            <Border Grid.Column="0" Style="{StaticResource Card}" Padding="4">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
@@ -104,181 +76,198 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <RichTextBox x:Name="TerminalBox" Grid.Row="0"
-                                 IsReadOnly="True" IsReadOnlyCaretVisible="False"
-                                 Background="#FF0B0B0B" Foreground="#FFD0D0D0"
-                                 BorderThickness="0"
-                                 FontFamily="Consolas, Cascadia Mono, monospace" FontSize="13"
-                                 VerticalScrollBarVisibility="Auto"
-                                 HorizontalScrollBarVisibility="Disabled">
-                        <RichTextBox.Resources>
-                            <Style TargetType="Paragraph">
-                                <Setter Property="Margin" Value="0" />
-                            </Style>
-                        </RichTextBox.Resources>
-                    </RichTextBox>
+                    <Grid Grid.Row="0">
+                        <RichTextBox x:Name="TerminalBox"
+                                     IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                                     Background="{StaticResource TerminalBrush}"
+                                     Foreground="{StaticResource TextPrimaryBrush}"
+                                     BorderThickness="0"
+                                     FontFamily="{StaticResource Mono}" FontSize="13"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Disabled"
+                                     AutomationProperties.Name="MUD output">
+                            <RichTextBox.Resources>
+                                <Style TargetType="Paragraph">
+                                    <Setter Property="Margin" Value="0" />
+                                </Style>
+                            </RichTextBox.Resources>
+                        </RichTextBox>
 
-                    <!-- live prompt -->
-                    <TextBlock Grid.Row="1" Text="{Binding CurrentPrompt}" Margin="6,3"
-                               FontFamily="Consolas, Cascadia Mono, monospace"
-                               Foreground="#FF8ED081" TextWrapping="Wrap" />
+                        <!-- empty state -->
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    IsHitTestVisible="False"
+                                    Visibility="{Binding HasTerminalContent, Converter={StaticResource InvBoolVis}}">
+                            <TextBlock Text="No output yet" Style="{StaticResource CaptionText}"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="Set a host and port, then Connect to begin."
+                                       Style="{StaticResource HintText}" HorizontalAlignment="Center"
+                                       Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- live prompt (rendered with its real ANSI colours in code-behind) -->
+                    <TextBlock x:Name="PromptBox" Grid.Row="1" Margin="6,6,6,4"
+                               FontFamily="{StaticResource Mono}" Foreground="{StaticResource TextPrimaryBrush}"
+                               TextWrapping="Wrap" AutomationProperties.Name="{Binding CurrentPrompt}" />
 
                     <!-- manual command line -->
-                    <Grid Grid.Row="2" Margin="4,2,4,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBox Grid.Column="0"
-                                 Text="{Binding ManualCommand, UpdateSourceTrigger=PropertyChanged}"
-                                 FontFamily="Consolas, Cascadia Mono, monospace"
-                                 ToolTip="Type a command and press Enter to send it to the MUD yourself.">
-                            <TextBox.InputBindings>
-                                <KeyBinding Key="Return" Command="{Binding SendManualCommand}" />
-                            </TextBox.InputBindings>
-                        </TextBox>
-                        <Button Grid.Column="1" Content="Send" Command="{Binding SendManualCommand}" />
-                        <Button Grid.Column="2" Content="Clear screen" Command="{Binding ClearTranscriptCommand}" />
+                    <Grid Grid.Row="2" Margin="4,0,4,4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Label Grid.Row="0" Content="Command" Target="{Binding ElementName=CommandBox}" />
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0" x:Name="CommandBox"
+                                     Text="{Binding ManualCommand, UpdateSourceTrigger=PropertyChanged}"
+                                     FontFamily="{StaticResource Mono}"
+                                     AutomationProperties.Name="Command to send"
+                                     ToolTip="Type a command and press Enter to send it to the MUD yourself.">
+                                <TextBox.InputBindings>
+                                    <KeyBinding Key="Return" Command="{Binding SendManualCommand}" />
+                                </TextBox.InputBindings>
+                            </TextBox>
+                            <Button Grid.Column="1" Content="Send" Command="{Binding SendManualCommand}" Margin="8,0,0,0" />
+                            <Button Grid.Column="2" Content="Clear" Command="{Binding ClearTranscriptCommand}" Margin="8,0,0,0" />
+                        </Grid>
                     </Grid>
                 </Grid>
             </Border>
 
-            <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Center"
-                          VerticalAlignment="Stretch" Background="#FF2A2A2A" />
+            <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Center"
+                          VerticalAlignment="Stretch" Background="Transparent"
+                          AutomationProperties.Name="Resize panels" />
 
             <!-- AI panel column -->
-            <Border Grid.Column="2" Background="{StaticResource PanelBg}" BorderBrush="{StaticResource PanelBorder}"
-                    BorderThickness="1" CornerRadius="4" Padding="8">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-
-                    <!-- AI control -->
-                    <StackPanel Grid.Row="0">
-                        <TextBlock Text="AI CONTROL" Style="{StaticResource SectionHeader}" Margin="0,0,0,4" />
-                        <CheckBox IsChecked="{Binding AiEnabled}" Foreground="#FFEAEAEA" FontWeight="SemiBold"
+            <Border Grid.Column="2" Style="{StaticResource Card}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="0,0,12,0">
+                        <!-- AI control -->
+                        <TextBlock Text="AI CONTROL" Style="{StaticResource SectionHeaderText}" Margin="0,0,0,4" />
+                        <CheckBox IsChecked="{Binding AiEnabled}" FontWeight="SemiBold"
                                   Content="AI may send commands (master switch)" />
-                        <TextBlock Text="When off, you drive the MUD by hand. Turn on once you're logged in."
-                                   Foreground="{StaticResource Muted}" TextWrapping="Wrap" FontSize="11" Margin="0,2,0,6" />
+                        <TextBlock Text="When off, you drive the MUD by hand. Turn on once you are logged in."
+                                   Style="{StaticResource HintText}" Margin="0,4,0,8" />
+                        <Label Content="Autonomy mode" Target="{Binding ElementName=ModeBox}" />
+                        <ComboBox x:Name="ModeBox" ItemsSource="{Binding AutonomyModes}"
+                                  SelectedItem="{Binding SelectedMode}" AutomationProperties.Name="Autonomy mode" />
 
-                        <Label Content="Autonomy mode" />
-                        <ComboBox ItemsSource="{Binding AutonomyModes}" SelectedItem="{Binding SelectedMode}" />
-
-                        <TextBlock Text="GAME STATE (GMCP / MSDP)" Style="{StaticResource SectionHeader}" />
-                        <TextBlock Text="{Binding GameStateText}" Foreground="#FF8ED081" TextWrapping="Wrap"
-                                   FontFamily="Consolas, Cascadia Mono, monospace" FontSize="12" />
-                    </StackPanel>
-
-                    <!-- Auto-login + goal + steering -->
-                    <StackPanel Grid.Row="1">
-                        <TextBlock Text="AUTO-LOGIN" Style="{StaticResource SectionHeader}" />
-                        <CheckBox IsChecked="{Binding AutoLogin}" Foreground="#FFEAEAEA"
-                                  Content="Auto-login on connect" Margin="0,0,0,4" />
-                        <Grid Margin="0,0,0,3">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="46" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="User" VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1" Text="{Binding LoginUsername, UpdateSourceTrigger=LostFocus}" />
-                        </Grid>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="46" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Pass" VerticalAlignment="Center" />
-                            <PasswordBox Grid.Column="1" x:Name="LoginPasswordBox"
-                                         Background="#FF111111" Foreground="#FFEAEAEA"
-                                         BorderBrush="{StaticResource PanelBorder}" Padding="4,3" />
-                        </Grid>
-
-                        <TextBlock Text="GOAL" Style="{StaticResource SectionHeader}" />
+                        <!-- Goal -->
+                        <TextBlock Text="GOAL" Style="{StaticResource SectionHeaderText}" />
                         <TextBox Text="{Binding Goal, UpdateSourceTrigger=LostFocus}" TextWrapping="Wrap"
-                                 AcceptsReturn="True" MinHeight="34"
+                                 AcceptsReturn="True" MinHeight="36" AutomationProperties.Name="Agent goal"
                                  ToolTip="The agent's current short-term goal. You and the AI can both edit it." />
 
-                        <TextBlock Text="LIVE STEERING" Style="{StaticResource SectionHeader}" />
+                        <!-- Steering -->
+                        <TextBlock Text="LIVE STEERING" Style="{StaticResource SectionHeaderText}" />
                         <TextBox Text="{Binding Steering, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap"
-                                 AcceptsReturn="True" MinHeight="46"
+                                 AcceptsReturn="True" MinHeight="48" AutomationProperties.Name="Live steering"
                                  ToolTip="Real-time guidance fed into every turn until you change or clear it." />
                         <Button Content="Clear steering" Command="{Binding ClearSteeringCommand}"
-                                HorizontalAlignment="Left" Margin="0,3,0,0" />
-                    </StackPanel>
+                                HorizontalAlignment="Left" Margin="0,6,0,0" />
 
-                    <!-- Approval bar -->
-                    <Border Grid.Row="2" Margin="0,8,0,0" Padding="6" CornerRadius="4"
-                            Background="#FF332B12" BorderBrush="#FF8A7320" BorderThickness="1"
-                            Visibility="{Binding HasPendingApproval, Converter={StaticResource BoolToVis}}">
-                        <StackPanel>
-                            <TextBlock Text="APPROVAL NEEDED" FontWeight="Bold" Foreground="#FFFFD479" />
-                            <TextBlock Text="{Binding PendingReasoning}" TextWrapping="Wrap"
-                                       Foreground="#FFE6E6E6" Margin="0,2,0,4" />
-                            <TextBlock Text="{Binding PendingRisk, StringFormat=Risk: {0}}" Foreground="{StaticResource Muted}" FontSize="11" />
-                            <TextBox Text="{Binding PendingCommand, UpdateSourceTrigger=PropertyChanged}"
-                                     FontFamily="Consolas, Cascadia Mono, monospace" Margin="0,3" />
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Content="Approve &amp; send" Command="{Binding ApproveCommand}" />
-                                <Button Content="Reject" Command="{Binding RejectCommand}" />
+                        <!-- Game state -->
+                        <TextBlock Text="GAME STATE (GMCP / MSDP)" Style="{StaticResource SectionHeaderText}" />
+                        <TextBlock Text="{Binding GameStateText}" Foreground="{StaticResource SuccessBrush}"
+                                   TextWrapping="Wrap" FontFamily="{StaticResource Mono}" FontSize="12" />
+
+                        <!-- Approval -->
+                        <Border Margin="0,12,0,0" Padding="10" CornerRadius="6"
+                                Background="#1F2A2233" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
+                                Visibility="{Binding HasPendingApproval, Converter={StaticResource BoolVis}}">
+                            <StackPanel>
+                                <TextBlock Text="Approval needed" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}" />
+                                <TextBlock Text="{Binding PendingReasoning}" TextWrapping="Wrap" Margin="0,4,0,4" />
+                                <TextBlock Style="{StaticResource CaptionText}"><Run Text="Risk: " /><Run Text="{Binding PendingRisk}" /></TextBlock>
+                                <Label Content="Command to send" Target="{Binding ElementName=PendingBox}" Margin="0,6,0,0" />
+                                <TextBox x:Name="PendingBox" Text="{Binding PendingCommand, UpdateSourceTrigger=PropertyChanged}"
+                                         FontFamily="{StaticResource Mono}" />
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                    <Button Content="Approve and send" Style="{StaticResource PrimaryButton}"
+                                            Command="{Binding ApproveCommand}" Margin="0,0,8,0" />
+                                    <Button Content="Reject" Command="{Binding RejectCommand}" />
+                                </StackPanel>
                             </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Live model output + reasoning feed -->
-                    <Grid Grid.Row="3" Margin="0,8,0,0">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-
-                        <TextBlock Grid.Row="0" Text="LIVE MODEL OUTPUT" Style="{StaticResource SectionHeader}" />
-                        <Border Grid.Row="1" Background="#FF101010" BorderBrush="{StaticResource PanelBorder}"
-                                BorderThickness="1" CornerRadius="3" MaxHeight="92">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <TextBlock Text="{Binding LiveResponse}" TextWrapping="Wrap" Margin="4"
-                                           Foreground="#FFB9C8A0"
-                                           FontFamily="Consolas, Cascadia Mono, monospace" FontSize="11" />
-                            </ScrollViewer>
                         </Border>
 
-                        <TextBlock Grid.Row="2" Text="AI REASONING" Style="{StaticResource SectionHeader}" />
-                        <ListBox Grid.Row="3" ItemsSource="{Binding ReasoningLog}"
-                                 Background="#FF141414" BorderBrush="{StaticResource PanelBorder}"
-                                 Foreground="#FFD7D7D7"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,1" />
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                    </Grid>
+                        <!-- Live model output -->
+                        <TextBlock Text="LIVE MODEL OUTPUT" Style="{StaticResource SectionHeaderText}" />
+                        <Border Background="{StaticResource TerminalBrush}" BorderBrush="{StaticResource BorderSubtleBrush}"
+                                BorderThickness="1" CornerRadius="6" MinHeight="64" MaxHeight="120">
+                            <Grid>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <TextBlock Text="{Binding LiveResponse}" TextWrapping="Wrap" Margin="8"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               FontFamily="{StaticResource Mono}" FontSize="12" />
+                                </ScrollViewer>
+                                <TextBlock Text="The model's output appears here as it is generated."
+                                           Margin="8"
+                                           VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource HintText}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding LiveResponse}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
 
-                    <!-- Anti-loop + memory -->
-                    <StackPanel Grid.Row="4" Margin="0,8,0,0">
-                        <TextBlock Text="SUPPRESSED (anti-loop)" Style="{StaticResource SectionHeader}" />
-                        <ListBox ItemsSource="{Binding Suppressions}" MaxHeight="84"
-                                 Background="#FF141414" BorderBrush="{StaticResource PanelBorder}"
-                                 Foreground="#FFE2A0A0"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
-                        <TextBlock Text="{Binding MemoryStats}" Foreground="{StaticResource Muted}" Margin="0,6,0,0" />
+                        <!-- Reasoning feed -->
+                        <TextBlock Text="AI REASONING" Style="{StaticResource SectionHeaderText}" />
+                        <Grid MinHeight="120">
+                            <ListBox x:Name="ReasoningList" ItemsSource="{Binding ReasoningLog}"
+                                     Background="{StaticResource SurfaceAltBrush}" MaxHeight="240"
+                                     Foreground="{StaticResource TextPrimaryBrush}"
+                                     AutomationProperties.Name="AI reasoning log">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,1" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <TextBlock Text="The AI's reasoning for each turn will show here once it starts playing."
+                                       Style="{StaticResource HintText}" Margin="8" VerticalAlignment="Center"
+                                       HorizontalAlignment="Center" IsHitTestVisible="False"
+                                       Visibility="{Binding HasItems, ElementName=ReasoningList, Converter={StaticResource InvBoolVis}}" />
+                        </Grid>
+
+                        <!-- Anti-loop -->
+                        <TextBlock Text="ANTI-LOOP (SUPPRESSED)" Style="{StaticResource SectionHeaderText}" />
+                        <Grid MinHeight="56">
+                            <ListBox x:Name="SuppressionsList" ItemsSource="{Binding Suppressions}"
+                                     Background="{StaticResource SurfaceAltBrush}" MaxHeight="110"
+                                     AutomationProperties.Name="Suppressed commands">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource DangerBrush}" Margin="0,1"><Run Text="blocked: " /><Run Text="{Binding Mode=OneWay}" /></TextBlock>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <TextBlock Text="No commands are being suppressed."
+                                       Style="{StaticResource HintText}" Margin="8" VerticalAlignment="Center"
+                                       HorizontalAlignment="Center" IsHitTestVisible="False"
+                                       Visibility="{Binding HasItems, ElementName=SuppressionsList, Converter={StaticResource InvBoolVis}}" />
+                        </Grid>
+
+                        <TextBlock Text="{Binding MemoryStats}" Style="{StaticResource CaptionText}" Margin="0,8,0,0" />
                     </StackPanel>
-                </Grid>
+                </ScrollViewer>
             </Border>
         </Grid>
 
         <!-- ===== Status bar ===== -->
-        <Border Grid.Row="2" Background="{StaticResource PanelBg}" BorderBrush="{StaticResource PanelBorder}"
-                BorderThickness="1" CornerRadius="4" Padding="8,4" Margin="0,6,0,0">
-            <TextBlock Text="{Binding StatusMessage}" Foreground="#FFCFCFCF" />
+        <Border Grid.Row="3" Style="{StaticResource Card}" Padding="10,6" Margin="0,8,0,0">
+            <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource TextSecondaryBrush}" />
         </Border>
     </Grid>
 </Window>

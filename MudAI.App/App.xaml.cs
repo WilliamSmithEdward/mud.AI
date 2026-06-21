@@ -83,7 +83,7 @@ public partial class App : Application
                 // Bounded, synchronous teardown. Run on a background thread so the awaited Core
                 // code (whose continuations capture no UI context there) cannot deadlock against
                 // the blocked UI thread. Disposing the host via DisposeAsync correctly disposes
-                // the async-only singletons — the orchestrator stops its loop and closes the
+                // the async-only singletons: the orchestrator stops its loop and closes the
                 // socket, and the SQLite connection is closed.
                 Task.Run(async () =>
                 {

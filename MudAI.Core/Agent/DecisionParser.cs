@@ -45,7 +45,7 @@ public static class DecisionParser
                 if (dto is not null)
                 {
                     if (IsMeaningful(dto)) return Map(dto, raw);
-                    fallbackParsed ??= dto; // valid JSON but no recognised fields — keep looking
+                    fallbackParsed ??= dto; // valid JSON but no recognised fields, keep looking
                 }
             }
 
@@ -65,7 +65,8 @@ public static class DecisionParser
         Risk = ParseRisk(dto.Risk),
         Confidence = dto.Confidence is { } c && c is >= 0 and <= 1 ? c : 0.5,
         Wait = dto.Wait ?? false,
-        Lesson = string.IsNullOrWhiteSpace(dto.Lesson) ? null : dto.Lesson.Trim()
+        Lesson = string.IsNullOrWhiteSpace(dto.Lesson) ? null : dto.Lesson.Trim(),
+        Awareness = ParseAwareness(dto.Awareness)
     };
 
     private static bool IsMeaningful(Dto d) =>
@@ -75,12 +76,53 @@ public static class DecisionParser
         || !string.IsNullOrWhiteSpace(d.Lesson)
         || !string.IsNullOrWhiteSpace(d.Risk)
         || d.Wait.HasValue
-        || d.Confidence.HasValue;
+        || d.Confidence.HasValue
+        || d.Awareness.HasValue;
+
+    /// <summary>
+    /// Tolerant parse of the optional "awareness" field: accepts the intended object shape and,
+    /// as a fallback for a small model, a bare string (filed under "misc").
+    /// </summary>
+    private static AwarenessNote? ParseAwareness(JsonElement? element)
+    {
+        if (element is not { } e) return null;
+
+        if (e.ValueKind == JsonValueKind.Object)
+        {
+            string subject = StringProp(e, "subject");
+            string fact = StringProp(e, "fact");
+            if (subject.Length == 0 || fact.Length == 0) return null;
+            return new AwarenessNote(StringProp(e, "category"), subject, fact);
+        }
+
+        if (e.ValueKind == JsonValueKind.String)
+        {
+            string s = (e.GetString() ?? "").Trim();
+            if (s.Length == 0) return null;
+            string subject = string.Join(' ', s.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(6));
+            return new AwarenessNote("misc", subject, s);
+        }
+
+        return null;
+    }
+
+    private static string StringProp(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? (v.GetString() ?? "").Trim()
+            : "";
 
     private static Dto? TryDeserialize(string json)
     {
         try { return JsonSerializer.Deserialize<Dto>(json, Opts); }
         catch (JsonException) { return null; }
+    }
+
+    /// <summary>True if the text already contains one complete, balanced top-level {...} object.
+    /// Used to early-stop a stream the moment the decision JSON has fully arrived.</summary>
+    public static bool ContainsBalancedObject(string text)
+    {
+        int start = text.IndexOf('{');
+        return start >= 0 && ExtractBalancedObject(text, start) is not null;
     }
 
     /// <summary>Returns the balanced {...} object starting at <paramref name="start"/>, ignoring
@@ -127,7 +169,7 @@ public static class DecisionParser
     private static string Clamp(string s)
     {
         s = s.Trim();
-        return s.Length <= 400 ? s : s[..400] + "…";
+        return s.Length <= 400 ? s : s[..400] + "...";
     }
 
     private sealed class Dto
@@ -139,5 +181,6 @@ public static class DecisionParser
         [JsonPropertyName("confidence")] public double? Confidence { get; set; }
         [JsonPropertyName("wait")] public bool? Wait { get; set; }
         [JsonPropertyName("lesson")] public string? Lesson { get; set; }
+        [JsonPropertyName("awareness")] public JsonElement? Awareness { get; set; }
     }
 }

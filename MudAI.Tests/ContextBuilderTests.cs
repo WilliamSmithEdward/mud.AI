@@ -16,6 +16,15 @@ public class ContextBuilderTests
             MaxResponseTokens = 0
         }));
 
+    private static ContextBuilder NewBuilder(int window, int awarenessTokens) =>
+        new(Options.Create(new MudAiOptions
+        {
+            ContextWindowTokens = window,
+            ReservedOutputTokens = 0,
+            MaxResponseTokens = 0,
+            AwarenessRecallTokens = awarenessTokens
+        }));
+
     [Fact]
     public void Build_ReturnsSystemThenUser()
     {
@@ -44,6 +53,63 @@ public class ContextBuilderTests
         Assert.Contains("be cautious", user);
         Assert.Contains("HP 80/120", user);
         Assert.Contains("screen text", user);
+    }
+
+    [Fact]
+    public void Build_RendersAwarenessBlockGroupedByCategory()
+    {
+        var builder = NewBuilder(98304);
+        var messages = builder.Build(new AgentContextInput
+        {
+            RecentScreen = "x",
+            Awareness =
+            [
+                new AwarenessEntry { Category = "combat", Subject = "rat", Fact = "easy" },
+                new AwarenessEntry { Category = "geography", Subject = "midgaard", Fact = "central hub" }
+            ]
+        });
+
+        var user = messages[1].Content;
+        Assert.Contains("WHAT YOU KNOW", user);
+        Assert.Contains("[combat]", user);
+        Assert.Contains("[geography]", user);
+    }
+
+    [Fact]
+    public void Build_AwarenessCap_KeepsHighestValueCategoryNotAlphabeticalFirst()
+    {
+        // "skills" sorts after "combat" alphabetically but has the stronger entry; with a cap that
+        // fits only one category line, the high-confidence one must survive.
+        var builder = NewBuilder(98304, awarenessTokens: 7);
+        var messages = builder.Build(new AgentContextInput
+        {
+            RecentScreen = "x",
+            Awareness =
+            [
+                new AwarenessEntry { Category = "combat", Subject = "rat", Fact = "weak", Confidence = 0.30 },
+                new AwarenessEntry { Category = "skills", Subject = "bash", Fact = "stun", Confidence = 0.95 }
+            ]
+        });
+
+        var user = messages[1].Content;
+        Assert.Contains("[skills]", user);
+        Assert.DoesNotContain("[combat]", user);
+    }
+
+    [Fact]
+    public void Build_NoNewOutput_AddsIdleNudge()
+    {
+        var builder = NewBuilder(98304);
+        var messages = builder.Build(new AgentContextInput { RecentScreen = "x", NoNewOutput = true });
+        Assert.Contains("since your last action", messages[1].Content);
+    }
+
+    [Fact]
+    public void Build_WithFreshOutput_HasNoIdleNudge()
+    {
+        var builder = NewBuilder(98304);
+        var messages = builder.Build(new AgentContextInput { RecentScreen = "x", NoNewOutput = false });
+        Assert.DoesNotContain("since your last action", messages[1].Content);
     }
 
     [Fact]

@@ -5,7 +5,7 @@ namespace MudAI.Core.Ansi;
 
 /// <summary>
 /// Turns the raw telnet text stream into per-line <see cref="MudMessage"/>s plus a live
-/// "prompt" (the trailing text that has no newline yet — MUD prompts like <c>&lt; 100hp &gt;</c>).
+/// "prompt" (the trailing text that has no newline yet, such as a MUD prompt <c>&lt; 100hp &gt;</c>).
 /// SGR colour state carries across lines. Not thread-safe: feed it from a single reader thread.
 /// </summary>
 public sealed class MudOutputProcessor(IAnsiParser parser)

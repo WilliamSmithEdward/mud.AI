@@ -3,6 +3,7 @@ using System.Text;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MudAI.Core.Agent;
 using MudAI.Core.Configuration;
@@ -23,9 +24,14 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly AgentOrchestrator _orchestrator;
     private readonly ICommandTracker _tracker;
     private readonly IMemoryStore _memory;
+    private readonly ILogger<MainViewModel> _logger;
     private readonly Dispatcher _dispatcher;
 
     private bool _applyingFromAgent; // guards the Goal feedback loop
+
+    // Busy state: the agent's "thinking" phase OR an in-flight command (connect/ping) shows the bar.
+    private bool _agentBusy;
+    private int _commandBusy;
 
     // Streamed deltas are accumulated here and flushed to LiveResponse on a timer, so a 1000-token
     // stream produces ~12 UI updates/sec instead of 1000 PropertyChanged posts + O(n^2) concatenation.
@@ -39,15 +45,20 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Raised on the UI thread when the transcript should be cleared.</summary>
     public event Action? TranscriptCleared;
 
+    /// <summary>Raised on the UI thread with the live prompt (carrying its ANSI colour segments).</summary>
+    public event Action<MudMessage>? PromptChanged;
+
     public MainViewModel(
         AgentOrchestrator orchestrator,
         ICommandTracker tracker,
         IMemoryStore memory,
-        IOptions<MudAiOptions> options)
+        IOptions<MudAiOptions> options,
+        ILogger<MainViewModel> logger)
     {
         _orchestrator = orchestrator;
         _tracker = tracker;
         _memory = memory;
+        _logger = logger;
         _dispatcher = Dispatcher.CurrentDispatcher;
 
         var o = options.Value;
@@ -60,16 +71,21 @@ public sealed partial class MainViewModel : ObservableObject
         _loginUsername = orchestrator.LoginUsername;
 
         _orchestrator.MudOutput += (_, m) => OnUi(() => MessageReceived?.Invoke(m));
-        _orchestrator.PromptOutput += (_, m) => OnUi(() => CurrentPrompt = m.PlainText);
+        _orchestrator.PromptOutput += (_, m) => OnUi(() =>
+        {
+            CurrentPrompt = m.PlainText; // plain text for accessibility / screen readers
+            PromptChanged?.Invoke(m);    // coloured rendering in the code-behind
+        });
         _orchestrator.Reasoning += (_, r) => OnUi(() => AppendReasoning(r));
         _orchestrator.Decision += (_, d) => OnUi(() => OnDecision(d));
         _orchestrator.Status += (_, s) => OnUi(() => StatusMessage = s);
         _orchestrator.ConnectionStateChanged += (_, c) => OnUi(() => OnConnectionChanged(c));
         _orchestrator.ApprovalRequested += (_, d) => OnUi(() => OnApprovalRequested(d));
         _orchestrator.GameStateChanged += (_, s) => OnUi(() =>
-            GameStateText = s.HasAny ? s.ToSummary() : "(no structured data — server may not support GMCP/MSDP)");
+            GameStateText = s.HasAny ? s.ToSummary() : "(no structured data; server may not support GMCP/MSDP)");
         _orchestrator.StreamingStarted += (_, _) => OnUi(ResetLiveBuffer);
         _orchestrator.StreamingDelta += (_, d) => OnUi(() => { _liveBuffer.Append(d); _liveDirty = true; });
+        _orchestrator.BusyChanged += (_, b) => OnUi(() => { _agentBusy = b; UpdateBusy(); });
 
         _liveFlushTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -107,6 +123,14 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _llmStatus = "LM Studio: not checked";
     [ObservableProperty] private string _statusMessage = "Ready.";
 
+    /// <summary>True while the agent is thinking or a connect/ping command is in flight.</summary>
+    [ObservableProperty] private bool _isBusy;
+
+    /// <summary>True once any MUD output has been rendered, so the terminal empty state can hide.</summary>
+    [ObservableProperty] private bool _hasTerminalContent;
+
+    private void UpdateBusy() => IsBusy = _agentBusy || _commandBusy > 0;
+
     // --- AI control ---
 
     [ObservableProperty] private bool _aiEnabled;
@@ -134,7 +158,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public ObservableCollection<string> ReasoningLog { get; } = [];
     public ObservableCollection<string> Suppressions { get; } = [];
-    [ObservableProperty] private string _memoryStats = "Memory: —";
+    [ObservableProperty] private string _memoryStats = "Memory: -";
     [ObservableProperty] private string _gameStateText = "(not connected)";
 
     // --- approval (proposal / hybrid) ---
@@ -170,14 +194,22 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanConnect))]
     private async Task ConnectAsync()
     {
+        _commandBusy++;
+        UpdateBusy();
         try
         {
-            StatusMessage = $"Connecting to {Host}:{Port}…";
+            StatusMessage = $"Connecting to {Host}:{Port}...";
             await _orchestrator.ConnectAsync(Host, Port);
         }
         catch (Exception ex)
         {
+            _logger.LogWarning(ex, "Connect to {Host}:{Port} failed", Host, Port);
             StatusMessage = "Connect failed: " + ex.Message;
+        }
+        finally
+        {
+            _commandBusy--;
+            UpdateBusy();
         }
     }
 
@@ -187,7 +219,11 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task DisconnectAsync()
     {
         try { await _orchestrator.DisconnectAsync(); }
-        catch (Exception ex) { StatusMessage = "Disconnect error: " + ex.Message; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Disconnect failed");
+            StatusMessage = "Disconnect error: " + ex.Message;
+        }
     }
 
     private bool CanDisconnect() => IsConnected;
@@ -199,7 +235,11 @@ public sealed partial class MainViewModel : ObservableObject
         ManualCommand = "";
         if (string.IsNullOrWhiteSpace(text)) return;
         try { await _orchestrator.SendManualAsync(text); }
-        catch (Exception ex) { StatusMessage = "Send failed: " + ex.Message; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Manual send failed");
+            StatusMessage = "Send failed: " + ex.Message;
+        }
     }
 
     [RelayCommand]
@@ -220,14 +260,28 @@ public sealed partial class MainViewModel : ObservableObject
     private void ClearSteering() => Steering = "";
 
     [RelayCommand]
-    private void ClearTranscript() => TranscriptCleared?.Invoke();
+    private void ClearTranscript()
+    {
+        TranscriptCleared?.Invoke();
+        HasTerminalContent = false;
+    }
 
     [RelayCommand]
     private async Task PingLlmAsync()
     {
-        LlmStatus = "LM Studio: checking…";
-        bool ok = await _orchestrator.PingLlmAsync();
-        LlmStatus = ok ? "LM Studio: reachable ✓" : "LM Studio: unreachable ✗";
+        _commandBusy++;
+        UpdateBusy();
+        LlmStatus = "LM Studio: checking...";
+        try
+        {
+            bool ok = await _orchestrator.PingLlmAsync();
+            LlmStatus = ok ? "LM Studio: reachable" : "LM Studio: not reachable";
+        }
+        finally
+        {
+            _commandBusy--;
+            UpdateBusy();
+        }
     }
 
     // --- event handling (already on UI thread) ---
@@ -239,6 +293,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (!connected)
         {
             CurrentPrompt = "";
+            PromptChanged?.Invoke(new MudMessage { Direction = MessageDirection.Incoming, PlainText = "" });
             ResetLiveBuffer(); // don't leave stale partial output if a stream was cut off
         }
     }
@@ -264,8 +319,8 @@ public sealed partial class MainViewModel : ObservableObject
     private void AppendReasoning(string reasoning)
     {
         if (string.IsNullOrWhiteSpace(reasoning)) return;
-        ReasoningLog.Add(reasoning.Trim());
-        while (ReasoningLog.Count > MaxLogEntries) ReasoningLog.RemoveAt(0);
+        ReasoningLog.Insert(0, reasoning.Trim()); // newest at the top
+        while (ReasoningLog.Count > MaxLogEntries) ReasoningLog.RemoveAt(ReasoningLog.Count - 1);
     }
 
     private void RefreshSuppressions()
@@ -282,11 +337,11 @@ public sealed partial class MainViewModel : ObservableObject
             int lessons = await _memory.CountAsync("lessons");
             int commands = await _memory.CountAsync("command_knowledge");
             int rooms = await _memory.CountAsync("rooms");
-            OnUi(() => MemoryStats = $"Lessons {lessons}  •  Commands {commands}  •  Rooms {rooms}");
+            OnUi(() => MemoryStats = $"Lessons {lessons}  |  Commands {commands}  |  Rooms {rooms}");
         }
-        catch
+        catch (Exception ex)
         {
-            // memory not ready yet / transient — ignore
+            _logger.LogDebug(ex, "Memory stats refresh failed (store may not be ready yet)");
         }
     }
 

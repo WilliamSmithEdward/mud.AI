@@ -13,10 +13,15 @@ using MudAI.Core.Telnet;
 namespace MudAI.Core.Agent;
 
 /// <summary>
-/// The central play loop and façade. Owns the connection, feeds telnet output through the
-/// ANSI processor into the screen buffer, and—when the master AI toggle is on—repeatedly
+/// The central play loop and facade. Owns the connection, feeds telnet output through the
+/// ANSI processor into the screen buffer, and (when the master AI toggle is on) repeatedly
 /// asks the LLM for the next command, gates it by <see cref="Mode"/>, sends it, observes the
 /// outcome, and feeds anti-loop + memory. All UI talks to this one object.
+///
+/// Thread-safe: public members may be called from any thread. The play loop runs on a background
+/// task; events (MudOutput, Reasoning, Decision, Status, ...) are raised off the UI thread, so the
+/// UI must marshal them to the dispatcher. Connect/Disconnect are serialized by a connection gate,
+/// game state is guarded by its own lock, and the approval handshake by another.
 /// </summary>
 public sealed class AgentOrchestrator : IAsyncDisposable
 {
@@ -34,7 +39,16 @@ public sealed class AgentOrchestrator : IAsyncDisposable
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
     private long _lastOutputTicks;
-    private long _maskEchoUntilTicks; // while > now, mask the password in echoed text
+    private volatile bool _passwordSent; // once true, mask any echo of the login password for the session
+
+    // Counts server lines (not our own echoes) so we can tell the model when the MUD is idle.
+    private long _serverLineSeq;
+    private long _lastTurnLineSeq;
+
+    // Number of awareness facts written this process; drives the periodic markdown dump.
+    private long _awarenessWrites;
+    // Serializes awareness.md exports so the periodic and end-of-session writes never overlap.
+    private readonly SemaphoreSlim _exportGate = new(1, 1);
 
     // Serializes ConnectAsync/DisconnectAsync so a reconnect can't interleave with an in-flight
     // disconnect and leave a stale loop behind.
@@ -50,6 +64,10 @@ public sealed class AgentOrchestrator : IAsyncDisposable
     private volatile AutonomyMode _mode;
     private volatile string _goal = "";
     private volatile string _steering = "";
+
+    // Room mapping: the last room we were in and the single movement command awaiting its result.
+    private volatile string? _lastRoom;
+    private volatile string? _pendingMovement;
 
     public AgentOrchestrator(
         ITelnetClient telnet,
@@ -124,6 +142,9 @@ public sealed class AgentOrchestrator : IAsyncDisposable
     /// <summary>Raised for each streamed token/delta of the model's output.</summary>
     public event EventHandler<string>? StreamingDelta;
 
+    /// <summary>Raised true while the agent is generating a turn, false when idle (drives a busy indicator).</summary>
+    public event EventHandler<bool>? BusyChanged;
+
     public GameState GameState { get { lock (_gameStateLock) return _gameState; } }
 
     // --- connection ---
@@ -146,6 +167,11 @@ public sealed class AgentOrchestrator : IAsyncDisposable
             _screen.Clear();
             _tracker.Reset();
             _loginManager.Reset();
+            _passwordSent = false;
+            _lastRoom = null;
+            _pendingMovement = null;
+            Interlocked.Exchange(ref _serverLineSeq, 0);
+            _lastTurnLineSeq = 0;
             lock (_gameStateLock) _gameState = new GameState();
             GameStateChanged?.Invoke(this, GameState);
             Touch();
@@ -165,6 +191,7 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         try
         {
             await StopLoopAsync();
+            await ExportAwarenessSafeAsync(); // end-of-session dump while the store is still alive
             await _telnet.DisconnectAsync();
         }
         finally
@@ -206,7 +233,23 @@ public sealed class AgentOrchestrator : IAsyncDisposable
     // --- sending ---
 
     /// <summary>Sends a command the human typed (no anti-loop suppression applied to manual input).</summary>
-    public Task SendManualAsync(string text) => SendInternalAsync(text, manual: true, CancellationToken.None);
+    public Task SendManualAsync(string text) => SendCommandsAsync(text, manual: true, CancellationToken.None);
+
+    /// <summary>
+    /// Splits on ';' and sends each command in order (client-side multi-command). A single
+    /// movement command is remembered so the resulting room change can be mapped.
+    /// </summary>
+    private async Task SendCommandsAsync(string text, bool manual, CancellationToken ct)
+    {
+        var commands = CommandSplitter.Split(text);
+        if (commands.Count == 0) return;
+
+        // Only track an unambiguous single move; a multi-command batch can't be mapped to one edge.
+        _pendingMovement = commands.Count == 1 && IsMovement(commands[0]) ? Normalize(commands[0]) : null;
+
+        foreach (var command in commands)
+            await SendInternalAsync(command, manual, ct);
+    }
 
     private async Task SendInternalAsync(string command, bool manual, CancellationToken ct, string? displayEcho = null)
     {
@@ -277,18 +320,21 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         {
             while (!ct.IsCancellationRequested)
             {
+                bool busy = false;
                 try
                 {
                     if (!IsConnected) { await Task.Delay(300, ct); continue; }
                     if (!AiEnabled) { await Task.Delay(200, ct); continue; }
-                    // Don't let the AI act while auto-login is still running — its sends would
+                    // Don't let the AI act while auto-login is still running, since its sends would
                     // interleave with the login script and corrupt the reply window.
                     if (_loginManager.LoginInProgress) { await Task.Delay(300, ct); continue; }
 
                     await WaitForSettleAsync(ct, afterSend: false);
                     if (ct.IsCancellationRequested || !AiEnabled || !IsConnected) continue;
 
-                    Status?.Invoke(this, "Thinking…");
+                    busy = true;
+                    BusyChanged?.Invoke(this, true);
+                    Status?.Invoke(this, "Thinking...");
                     var messages = _contextBuilder.Build(await BuildInputAsync(ct));
                     string raw = await GetCompletionAsync(messages, ct);
                     var decision = DecisionParser.Parse(raw);
@@ -301,6 +347,12 @@ public sealed class AgentOrchestrator : IAsyncDisposable
                         Goal = decision.Goal!;
                     if (!string.IsNullOrWhiteSpace(decision.Lesson))
                         await _memory.AddOrReinforceLessonAsync(decision.Lesson!, "agent", 0.6, ct);
+                    if (decision.Awareness is { } note)
+                    {
+                        await _memory.AddOrReinforceAwarenessAsync(note.Category, note.Subject, note.Fact, 0.6, ct);
+                        if (Interlocked.Increment(ref _awarenessWrites) % Math.Max(1, _options.AwarenessExportEveryNWrites) == 0)
+                            _ = ExportAwarenessSafeAsync(waitForGate: false);
+                    }
 
                     if (decision.Wait || !decision.HasCommand)
                     {
@@ -328,7 +380,7 @@ public sealed class AgentOrchestrator : IAsyncDisposable
                     string commandToSend = decision.Command;
                     if (!autoSend)
                     {
-                        Status?.Invoke(this, "Awaiting your approval…");
+                        Status?.Invoke(this, "Awaiting your approval...");
                         var verdict = await RequestApprovalAsync(decision, ct);
                         if (!verdict.Approved || string.IsNullOrWhiteSpace(verdict.Command))
                         {
@@ -341,16 +393,17 @@ public sealed class AgentOrchestrator : IAsyncDisposable
 
                     if (ct.IsCancellationRequested || !AiEnabled || !IsConnected) continue;
 
-                    await SendInternalAsync(commandToSend, manual: false, ct);
+                    await SendCommandsAsync(commandToSend, manual: false, ct);
                     long mark = _screen.Head;
 
                     await WaitForReplyAsync(mark, ct);
 
                     string response = _screen.GetTextSince(mark);
                     var outcome = _tracker.ClassifyAndRecord(commandToSend, response);
-                    await _memory.RecordCommandResultAsync(
-                        FirstWord(commandToSend), outcome.Kind == OutcomeKind.Success, ct);
-                    Status?.Invoke(this, $"\"{commandToSend}\" → {outcome.Kind}");
+                    bool success = outcome.Kind == OutcomeKind.Success;
+                    foreach (var part in CommandSplitter.Split(commandToSend))
+                        await _memory.RecordCommandResultAsync(FirstWord(part), success, ct);
+                    Status?.Invoke(this, $"\"{commandToSend}\" -> {outcome.Kind}");
 
                     await Task.Delay(_options.MinTurnDelayMs, ct);
                 }
@@ -362,6 +415,10 @@ public sealed class AgentOrchestrator : IAsyncDisposable
                     try { await Task.Delay(1500, ct); }
                     catch (OperationCanceledException) { break; }
                 }
+                finally
+                {
+                    if (busy) BusyChanged?.Invoke(this, false);
+                }
             }
         }
         finally
@@ -370,11 +427,29 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         }
     }
 
-    /// <summary>Runs the completion, streaming token-by-token when enabled, and returns the full text.</summary>
+    /// <summary>Runs the completion, retrying once if the model returns nothing (a wasted turn).</summary>
     private async Task<string> GetCompletionAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
+    {
+        string raw = await CompleteOnceAsync(messages, ct);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            _logger.LogWarning("Empty model response; retrying once.");
+            raw = await CompleteOnceAsync(messages, ct);
+        }
+        return raw;
+    }
+
+    /// <summary>One completion. When streaming, stops as soon as the decision JSON is fully formed
+    /// so we send the command without waiting for trailing tokens the model might still generate.</summary>
+    private async Task<string> CompleteOnceAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
     {
         if (!_options.StreamResponses)
             return await _llm.CompleteAsync(messages, ct);
+
+        // Early-stop is only safe when the server guarantees pure JSON (response_format): then the
+        // first '{' is the real decision object. Without it, a stray brace in prose could stop us
+        // short, so we let the whole stream run.
+        bool canEarlyStop = _options.UseJsonResponseFormat;
 
         StreamingStarted?.Invoke(this, EventArgs.Empty);
         var sb = new StringBuilder();
@@ -382,14 +457,25 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         {
             sb.Append(delta);
             StreamingDelta?.Invoke(this, delta);
+            // Once a complete top-level JSON object has arrived, the decision is in hand; closing the
+            // stream early stops further server-side decoding (the bulk of per-turn latency).
+            if (canEarlyStop && delta.Contains('}') && DecisionParser.ContainsBalancedObject(sb.ToString()))
+                break;
         }
         return sb.ToString();
     }
 
     private async Task<AgentContextInput> BuildInputAsync(CancellationToken ct)
     {
-        var lessons = await _memory.GetTopLessonsAsync(12, ct);
-        var commands = await _memory.GetCommandKnowledgeAsync(15, ct);
+        var lessons = await _memory.GetTopLessonsAsync(6, ct);
+        var commands = await _memory.GetCommandKnowledgeAsync(10, ct);
+        var awareness = await _memory.GetBalancedAwarenessAsync(_options.AwarenessRecallPerCategory, ct);
+        string mapRecall = await BuildMapRecallAsync(ct);
+
+        long lineSeq = Interlocked.Read(ref _serverLineSeq);
+        bool noNewOutput = lineSeq == _lastTurnLineSeq;
+        _lastTurnLineSeq = lineSeq;
+
         return new AgentContextInput
         {
             RecentScreen = _screen.GetRecentText(_options.MaxRecentLines),
@@ -399,9 +485,74 @@ public sealed class AgentOrchestrator : IAsyncDisposable
             Suppressed = _tracker.GetActiveSuppressions(),
             Lessons = lessons,
             Commands = commands,
+            Awareness = awareness,
             GameStateSummary = GameState.ToSummary(),
+            MapRecall = mapRecall,
+            NoNewOutput = noNewOutput,
             Mode = Mode
         };
+    }
+
+    /// <summary>Compact, token-efficient map recall: the current room's known exits plus the map size.</summary>
+    private async Task<string> BuildMapRecallAsync(CancellationToken ct)
+    {
+        var gs = GameState;
+        string recall = "";
+        if (!string.IsNullOrWhiteSpace(gs.RoomName))
+        {
+            var room = await _memory.GetRoomRecallAsync(gs.RoomName!, ct);
+            if (room is not null) recall = room.ToSummary();
+        }
+
+        int rooms = await _memory.CountAsync("rooms", ct);
+        if (rooms > 0)
+            recall = recall.Length == 0 ? $"Rooms mapped: {rooms}." : $"{recall} Rooms mapped: {rooms}.";
+
+        var zones = await _memory.GetZoneAwarenessAsync(5, ct);
+        string zoneLine = zones.ToLine();
+        if (zoneLine.Length > 0)
+            recall = recall.Length == 0 ? zoneLine : $"{recall} {zoneLine}";
+
+        return recall;
+    }
+
+    /// <summary>
+    /// Regenerates the human-readable awareness.md dump from the DB. Serialized by a gate so the
+    /// periodic and end-of-session exports never overlap. The periodic (fire-and-forget) caller
+    /// passes <paramref name="waitForGate"/>=false to coalesce: if an export is already running it
+    /// skips, since that running export will already include its writes. The disconnect caller
+    /// waits so the final dump reflects everything.
+    /// </summary>
+    private async Task ExportAwarenessSafeAsync(bool waitForGate = true)
+    {
+        if (waitForGate)
+            await _exportGate.WaitAsync();
+        else if (!await _exportGate.WaitAsync(0))
+            return; // an export is already in flight; this periodic one would be redundant
+
+        try
+        {
+            var entries = await _memory.GetAllAwarenessAsync();
+            var commands = await _memory.GetCommandKnowledgeAsync(20);
+            int rooms = await _memory.CountAsync("rooms");
+            await AwarenessExporter.ExportAsync(ResolveAwarenessPath(), entries, commands, rooms);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Awareness export failed");
+        }
+        finally
+        {
+            _exportGate.Release();
+        }
+    }
+
+    private string ResolveAwarenessPath()
+    {
+        var configured = _options.AwarenessExportPath;
+        if (!string.IsNullOrWhiteSpace(configured)) return configured;
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MudAI");
+        return Path.Combine(dir, "awareness.md");
     }
 
     /// <summary>Waits until MUD output has been quiet for <see cref="MudAiOptions.OutputSettleMs"/> (bounded).</summary>
@@ -411,14 +562,18 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         int maxWait = afterSend ? 4000 : 8000;
         long start = Stopwatch.GetTimestamp();
 
-        await Task.Delay(afterSend ? Math.Min(settle, 350) : 120, ct);
+        // If output has already been quiet long enough, pay no settle delay at all.
+        if (ElapsedMs(Volatile.Read(ref _lastOutputTicks), Stopwatch.GetTimestamp()) >= settle)
+            return;
+
+        await Task.Delay(afterSend ? Math.Min(settle, 250) : 80, ct);
 
         while (!ct.IsCancellationRequested)
         {
             long now = Stopwatch.GetTimestamp();
             if (ElapsedMs(Volatile.Read(ref _lastOutputTicks), now) >= settle) return;
             if (ElapsedMs(start, now) >= maxWait) return;
-            await Task.Delay(80, ct);
+            await Task.Delay(40, ct);
         }
     }
 
@@ -434,7 +589,7 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         {
             if (_screen.Head > mark) break; // a reply line arrived
             if (ElapsedMs(start, Stopwatch.GetTimestamp()) >= _options.ResponseTimeoutMs) return;
-            await Task.Delay(60, ct);
+            await Task.Delay(30, ct);
         }
 
         await WaitForSettleAsync(ct, afterSend: true);
@@ -449,6 +604,7 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         m = MaskSecret(m);
         _screen.AppendLine(m.PlainText);
         Touch();
+        Interlocked.Increment(ref _serverLineSeq);
         MudOutput?.Invoke(this, m);
         TryLogin(m.PlainText);
     }
@@ -457,18 +613,21 @@ public sealed class AgentOrchestrator : IAsyncDisposable
     {
         m = MaskSecret(m);
         _screen.SetPrompt(m.PlainText);
-        Touch();
+        // Deliberately NOT Touch()ing here: many MUDs continuously redraw a status prompt
+        // (e.g. "< hp mp mv >"), and counting that as fresh output would keep re-arming the
+        // settle/quiet clock and stall every turn. The quiet clock tracks real line output only.
         PromptOutput?.Invoke(this, m);
         TryLogin(m.PlainText);
     }
 
     /// <summary>
-    /// Briefly after sending a password, mask any echo of it so the cleartext password never
-    /// lands in the transcript, the prompt display, or (most importantly) the LLM context.
+    /// Once the login password has been sent, mask any echo of it so the cleartext password never
+    /// lands in the transcript, the prompt display, or (most importantly) the LLM context. This is
+    /// unconditional for the rest of the session, not time-windowed, so a late echo cannot leak.
     /// </summary>
     private MudMessage MaskSecret(MudMessage m)
     {
-        if (Stopwatch.GetTimestamp() >= Volatile.Read(ref _maskEchoUntilTicks)) return m;
+        if (!_passwordSent) return m;
 
         string pw = _loginManager.Password;
         if (string.IsNullOrEmpty(pw) || !m.PlainText.Contains(pw, StringComparison.Ordinal)) return m;
@@ -495,9 +654,8 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         {
             if (action.Secret)
             {
-                // Mask any echo of the password for a short window after sending it.
-                long window = Stopwatch.GetTimestamp() + (long)(1500.0 * Stopwatch.Frequency / 1000.0);
-                Volatile.Write(ref _maskEchoUntilTicks, window);
+                // From now on, mask any echo of the password in output that reaches the UI or the LLM.
+                _passwordSent = true;
             }
 
             string display = action.Secret ? "> ********" : "> " + action.Command;
@@ -538,6 +696,35 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         }
 
         GameStateChanged?.Invoke(this, updated);
+        TrackRoom(updated);
+    }
+
+    /// <summary>Persists the current room and, if a single move led here, the edge that connects them.</summary>
+    private void TrackRoom(GameState state)
+    {
+        string? room = string.IsNullOrWhiteSpace(state.RoomName) ? null : state.RoomName;
+        if (room is null || room == _lastRoom) return;
+
+        string? from = _lastRoom;
+        string? move = _pendingMovement;
+        _lastRoom = room;
+        _pendingMovement = null;
+
+        _ = RecordRoomAsync(from, move, room, state.Zone ?? "", state.Exits ?? "");
+    }
+
+    private async Task RecordRoomAsync(string? from, string? move, string room, string zone, string exits)
+    {
+        try
+        {
+            await _memory.RecordRoomVisitAsync(room, zone, exits);
+            if (from is not null && move is not null)
+                await _memory.RecordExitAsync(from, move, room);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Room mapping write failed");
+        }
     }
 
     // --- helpers ---
@@ -554,6 +741,17 @@ public sealed class AgentOrchestrator : IAsyncDisposable
         return (space < 0 ? trimmed : trimmed[..space]).ToLowerInvariant();
     }
 
+    private static readonly HashSet<string> Directions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "n", "s", "e", "w", "u", "d", "ne", "nw", "se", "sw",
+        "north", "south", "east", "west", "up", "down",
+        "northeast", "northwest", "southeast", "southwest"
+    };
+
+    private static bool IsMovement(string command) => Directions.Contains(command.Trim());
+
+    private static string Normalize(string command) => command.Trim().ToLowerInvariant();
+
     public Task<bool> PingLlmAsync(CancellationToken ct = default) => _llm.PingAsync(ct);
 
     public async ValueTask DisposeAsync()
@@ -567,5 +765,6 @@ public sealed class AgentOrchestrator : IAsyncDisposable
 
         await DisconnectAsync();
         _connectionGate.Dispose();
+        _exportGate.Dispose();
     }
 }

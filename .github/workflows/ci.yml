@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    # WPF (MudAI.App targets net10.0-windows) requires a Windows runner.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore MudAI.slnx
+
+      # Treat warnings as errors so the AGENTS.md "keep the build warning-clean" rule is enforced.
+      - name: Build
+        run: dotnet build MudAI.slnx --no-restore --configuration Release -warnaserror
+
+      - name: Test
+        run: dotnet test MudAI.Tests/MudAI.Tests.csproj --no-build --configuration Release --verbosity normal

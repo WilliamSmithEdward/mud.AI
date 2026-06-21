@@ -72,7 +72,7 @@ public sealed class ScreenBuffer
 
     /// <summary>
     /// Text of all lines whose global index is &gt;= <paramref name="marker"/>. The live prompt is
-    /// deliberately EXCLUDED so a redrawn prompt is not mistaken for a command's reply — an empty
+    /// deliberately EXCLUDED so a redrawn prompt is not mistaken for a command's reply; an empty
     /// result means no new lines arrived. If lines were evicted, returns what remains.
     /// </summary>
     public string GetTextSince(long marker)

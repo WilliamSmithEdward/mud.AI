@@ -9,7 +9,7 @@ public readonly record struct LoginAction(string Command, bool Secret);
 
 /// <summary>
 /// Pattern-driven auto-login. Watches incoming MUD text for configured prompts (expect/send
-/// steps) and returns the response to send, substituting {username}/{password}. Pure logic —
+/// steps) and returns the response to send, substituting {username}/{password}. Pure logic:
 /// the orchestrator performs the actual send. Default script handles a typical name/password flow.
 ///
 /// Note: <see cref="LoginStep.WhenContains"/> is a raw, case-insensitive substring. To avoid
@@ -76,7 +76,7 @@ public sealed class LoginManager
     }
 
     /// <summary>
-    /// True while auto-login is enabled and the script hasn't finished — the AI loop should hold
+    /// True while auto-login is enabled and the script hasn't finished, so the AI loop should hold
     /// off so its sends don't interleave with login. Bounded by a timeout as a safety valve.
     /// </summary>
     public bool LoginInProgress

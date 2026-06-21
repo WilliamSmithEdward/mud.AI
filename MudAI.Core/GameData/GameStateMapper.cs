@@ -49,7 +49,7 @@ public static class GameStateMapper
                 _ => null
             };
             // Don't clobber known exits with an empty set (preserve prior via the `?? state.Exits` fallback).
-            return string.IsNullOrEmpty(result) ? null : result;
+            return NormalizeExits(result);
         }
 
         return msg.Package.ToLowerInvariant() switch
@@ -83,6 +83,20 @@ public static class GameStateMapper
         };
     }
 
+    /// <summary>
+    /// Canonicalizes an exits string to a single comma-and-space delimiter regardless of how the
+    /// server formatted it (comma, space, or bracket separated). Keeps downstream consumers - the
+    /// room map and the frontier comma-count heuristic - consistent. Returns null if empty.
+    /// </summary>
+    private static string? NormalizeExits(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var tokens = raw.Split(
+            [',', ';', ' ', '\t', '|'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return tokens.Length == 0 ? null : string.Join(", ", tokens);
+    }
+
     public static GameState ApplyMsdp(GameState state, IReadOnlyDictionary<string, object?> d)
     {
         string? Str(string key) => d.TryGetValue(key, out var v) ? v as string : null;
@@ -97,7 +111,7 @@ public static class GameStateMapper
                 string s => s,
                 _ => null
             };
-            return string.IsNullOrEmpty(result) ? null : result;
+            return NormalizeExits(result);
         }
 
         return state with

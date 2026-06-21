@@ -4,5 +4,10 @@
              xmlns:local="clr-namespace:MudAI.App">
     <Application.Resources>
         <!-- Window is created and shown from App.OnStartup via the DI host. -->
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/DesignSystem.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

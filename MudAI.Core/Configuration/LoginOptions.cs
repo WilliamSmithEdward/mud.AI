@@ -7,7 +7,7 @@ public sealed class LoginOptions
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
 
-    /// <summary>Custom expect/send steps. If empty, a sensible default (name → password) is used.</summary>
+    /// <summary>Custom expect/send steps. If empty, a sensible default (name then password) is used.</summary>
     public List<LoginStep> Script { get; set; } = [];
 }
 

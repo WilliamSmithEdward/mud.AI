@@ -11,7 +11,7 @@ namespace MudAI.Core.Agent;
 /// </summary>
 public sealed class CommandTracker(IOptions<MudAiOptions> options) : ICommandTracker
 {
-    // Typical DikuMUD/Arctic responses to a bad command or a move that can't happen.
+    // Typical MUD responses to a bad command or a move that can't happen.
     private static readonly string[] ErrorPhrases =
     [
         "huh?!?",
@@ -158,6 +158,6 @@ public sealed class CommandTracker(IOptions<MudAiOptions> options) : ICommandTra
     private static string Snippet(string response)
     {
         var trimmed = response.Trim().ReplaceLineEndings(" ");
-        return trimmed.Length <= 160 ? trimmed : trimmed[..160] + "…";
+        return trimmed.Length <= 160 ? trimmed : trimmed[..160] + "...";
     }
 }
